@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+bot.env
+*.log
+sessions/
+.DS_Store
