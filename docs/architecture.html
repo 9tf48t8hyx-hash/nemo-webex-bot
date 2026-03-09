@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Architecture — Nemo Webex Bot + LLM + MCP</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem;
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  h1 { font-size: 2rem; margin-bottom: 0.5rem; color: var(--accent); }
+  h2 {
+    font-size: 1.4rem;
+    margin-top: 2.5rem;
+    margin-bottom: 1rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--green);
+  }
+  h3 { font-size: 1.1rem; margin-top: 1.5rem; margin-bottom: 0.5rem; color: var(--purple); }
+  p { margin-bottom: 1rem; }
+  a { color: var(--accent); text-decoration: none; }
+  code {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.15em 0.4em;
+    font-size: 0.9em;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    margin-bottom: 1.2rem;
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  pre code { background: none; border: none; padding: 0; }
+  .diagram {
+    background: #0d1117;
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 1.5rem 0;
+    text-align: center;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.85rem;
+    white-space: pre;
+    line-height: 1.8;
+    overflow-x: auto;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1.2rem;
+  }
+  th, td {
+    text-align: left;
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--border);
+  }
+  th { background: var(--surface); color: var(--accent); font-weight: 600; }
+  td { background: var(--bg); }
+  .tag {
+    display: inline-block;
+    padding: 0.15em 0.5em;
+    border-radius: 12px;
+    font-size: 0.8em;
+    font-weight: 600;
+  }
+  .tag-blue { background: #1f3a5f; color: var(--accent); }
+  .tag-green { background: #1a3a2a; color: var(--green); }
+  .tag-orange { background: #3a2a1a; color: var(--orange); }
+  .tag-red { background: #3a1a1a; color: var(--red); }
+  .note {
+    background: #1a2332;
+    border-left: 4px solid var(--accent);
+    padding: 0.8rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 8px 8px 0;
+  }
+  .warn {
+    background: #2a2215;
+    border-left: 4px solid var(--orange);
+    padding: 0.8rem 1rem;
+    margin: 1rem 0;
+    border-radius: 0 8px 8px 0;
+  }
+  .file-ref {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    margin: 0.5rem 0 1.2rem 0;
+    color: var(--text-muted);
+    font-size: 0.9rem;
+  }
+  .file-ref code { color: var(--accent); }
+  .subtitle { color: var(--text-muted); font-size: 1rem; margin-bottom: 2rem; }
+  .section-intro { color: var(--text-muted); margin-bottom: 1.2rem; }
+</style>
+</head>
+<body>
+
+<h1>Nemo Webex Bot</h1>
+<p class="subtitle">Bot conversationnel Webex connecte a un LLM cloud et a des outils MCP locaux — Mars 2026</p>
+
+<!-- ============================================================ -->
+<h2>1. Vue d'ensemble</h2>
+
+<p>Un bot Webex (<code>nemo-drancy@webex.bot</code>) heberge sur une VM interne recoit les messages des utilisateurs via <strong>websocket</strong> (pas de webhook, pas d'IP publique necessaire), les envoie a un LLM cloud (OVH AI Endpoints) pour le raisonnement, et donne au LLM acces a des outils locaux via le protocole <strong>MCP</strong> (Model Context Protocol).</p>
+
+<p>Le LLM peut ainsi repondre a des questions factuelles (meteo, heure, droit francais, recherche web, production solaire) en appelant les outils MCP de facon autonome.</p>
+
+<!-- ============================================================ -->
+<h2>2. Architecture</h2>
+
+<div class="diagram">
+                    Webex Cloud (cisco.com)
+                          |
+                     websocket (persistent)
+                          |
+              +-----------v-----------+
+              |   Bot Python          |
+              |   10.1.0.55:22022     |
+              |   (nemo-webex-bot)    |
+              +-----+----------+------+
+                    |          |
+          HTTPS API |          | HTTP SSE
+          (OpenAI)  |          | (MCP protocol)
+                    v          v
+         +----------+    +----+-----------+
+         | OVH LLM  |    | Nemo v2        |
+         | Endpoints |    | 10.1.0.61      |
+         | gpt-oss-  |    | ports 7001-7005|
+         | 120b      |    | (5 MCP servers)|
+         +-----------+    +----------------+
+</div>
+
+<table>
+  <tr>
+    <th>Composant</th>
+    <th>Localisation</th>
+    <th>Role</th>
+    <th>Protocole</th>
+  </tr>
+  <tr>
+    <td>Webex Cloud</td>
+    <td>Internet (Cisco)</td>
+    <td>Messagerie, routage des messages</td>
+    <td>WebSocket (sortant)</td>
+  </tr>
+  <tr>
+    <td>Bot Python</td>
+    <td>VM 10.1.0.55 (port SSH 22022)</td>
+    <td>Orchestration : recoit msg, appelle LLM, execute outils</td>
+    <td>WebSocket (Webex) + HTTPS (LLM) + HTTP SSE (MCP)</td>
+  </tr>
+  <tr>
+    <td>LLM OVH</td>
+    <td>Cloud OVH AI Endpoints</td>
+    <td>Raisonnement, generation de reponses, function calling</td>
+    <td>HTTPS (API OpenAI-compatible)</td>
+  </tr>
+  <tr>
+    <td>Serveurs MCP</td>
+    <td>VM 10.1.0.61, ports 7001-7005</td>
+    <td>Outils : meteo, heure, droit, recherche web, solaire</td>
+    <td>HTTP SSE (MCP over SSE)</td>
+  </tr>
+</table>
+
+<div class="note">
+  <strong>Pourquoi WebSocket et pas Webhook ?</strong> Les VMs internes n'ont pas d'IP publique. Le mode websocket de la lib <code>webex-bot</code> etablit une connexion sortante persistante vers le cloud Webex, ce qui ne necessite aucun port entrant ni reverse proxy.
+</div>
+
+<!-- ============================================================ -->
+<h2>3. Composants detailles</h2>
+
+<!-- 3.1 -->
+<h3>3.1 Webex Bot (webex-bot)</h3>
+
+<p>La bibliotheque Python <code>webex-bot</code> (v1.2.7, PyPI) gere la connexion websocket au cloud Webex, la reception des messages, et le dispatch vers des "commandes". On utilise un <strong>catch-all</strong> : une commande sans mot-cle enregistree comme <code>help_command</code> qui capture tous les messages.</p>
+
+<div class="file-ref">Voir <code>bot.py</code> — Point d'entree du bot, classe <code>LLMCommand</code>, gestion de l'historique par utilisateur, boucle asyncio background.</div>
+
+<div class="warn">
+  <strong>Pattern threading important.</strong> La lib <code>webex-bot</code> a sa propre boucle asyncio interne. On ne peut pas utiliser <code>asyncio.run()</code> depuis ses callbacks. Solution : creer une boucle asyncio dediee dans un thread daemon, et utiliser <code>asyncio.run_coroutine_threadsafe()</code> pour executer les appels MCP/LLM depuis les callbacks synchrones de webex-bot.
+</div>
+
+<!-- 3.2 -->
+<h3>3.2 Configuration</h3>
+
+<div class="file-ref">Voir <code>config.py</code> — Tokens, URLs des serveurs MCP, modele LLM, system prompt, constantes.</div>
+
+<div class="file-ref">Voir <code>bot.env</code> — Variables d'environnement (secrets : <code>WEBEX_BOT_TOKEN</code>, <code>OVH_TOKEN</code>, <code>TAVILY_API_KEY</code>).</div>
+
+<!-- 3.3 -->
+<h3>3.3 Client MCP (Model Context Protocol)</h3>
+
+<p>MCP est un protocole standardise (Anthropic, 2024) qui permet a un LLM d'appeler des "outils" (fonctions) exposes par des serveurs externes. Le transport utilise ici <strong>SSE</strong> (Server-Sent Events) : le client maintient une connexion HTTP persistante pour recevoir les messages du serveur, et envoie ses requetes via POST.</p>
+
+<div class="file-ref">Voir <code>mcp_client.py</code> — Classe <code>MCPManager</code>, connexion SSE, decouverte des outils, appel d'outils, format OpenAI.</div>
+
+<div class="note">
+  <strong>Pas de namespace.</strong> Contrairement a d'autres implementations, les noms d'outils ne sont pas prefixes par le serveur. Le MCPManager maintient un dictionnaire interne <code>tool_name &rarr; server_name</code> pour router les appels. C'est plus simple car les noms d'outils des differents serveurs ne se chevauchent pas.
+</div>
+
+<!-- 3.4 -->
+<h3>3.4 Client LLM (OVH AI Endpoints)</h3>
+
+<p>Le LLM est appele via une API OpenAI-compatible. La boucle de function calling permet au LLM d'appeler plusieurs outils de facon iterative (max 5 iterations) avant de produire sa reponse finale.</p>
+
+<div class="file-ref">Voir <code>llm_client.py</code> — Fonction <code>call_llm()</code>, boucle function calling, gestion des tool_calls et resultats.</div>
+
+<div class="diagram">
+Flux function calling (boucle LLM + outils)
+
+  User: "Quel temps fait-il a Paris ?"
+       |
+       v
+  LLM recoit le message + liste des outils disponibles
+       |
+       v
+  LLM repond: tool_call &rarr; get_weather_today({"city_name": "Paris"})
+       |
+       v
+  Bot execute l'outil MCP &rarr; resultat meteo JSON
+       |
+       v
+  LLM recoit le resultat de l'outil
+       |
+       v
+  LLM genere la reponse finale:
+  "A Paris il fait 12C, ciel couvert, vent 15 km/h..."
+       |
+       v
+  Bot envoie la reponse dans Webex
+</div>
+
+<!-- ============================================================ -->
+<h2>4. Serveurs MCP (cote serveur)</h2>
+
+<p>Les 5 serveurs MCP tournent sur la VM <code>10.1.0.61</code> sous forme de services systemd. Chacun est un script Python utilisant <strong>FastMCP</strong> (la lib officielle Anthropic) qui expose des outils via le transport SSE.</p>
+
+<table>
+  <tr>
+    <th>Port</th>
+    <th>Serveur</th>
+    <th>Outils exposes</th>
+    <th>Source de donnees</th>
+  </tr>
+  <tr>
+    <td>7001</td>
+    <td>horloge</td>
+    <td><code>get_current_datetime</code></td>
+    <td>Horloge systeme</td>
+  </tr>
+  <tr>
+    <td>7002</td>
+    <td>photovoltaic</td>
+    <td><code>get_realtime</code>, <code>get_history</code>...</td>
+    <td>API Huawei FusionSolar</td>
+  </tr>
+  <tr>
+    <td>7003</td>
+    <td>legifrance</td>
+    <td><code>search</code>, <code>get_article</code>...</td>
+    <td>API Legifrance (DILA/PISTE)</td>
+  </tr>
+  <tr>
+    <td>7004</td>
+    <td>weather</td>
+    <td><code>get_current</code>, <code>get_forecast</code></td>
+    <td>API Apple WeatherKit</td>
+  </tr>
+  <tr>
+    <td>7005</td>
+    <td>websearch</td>
+    <td><code>web_search</code></td>
+    <td>API Tavily (recherche web)</td>
+  </tr>
+</table>
+
+<h3>4.1 Structure d'un serveur MCP (exemple horloge)</h3>
+
+<pre><code>from mcp.server.fastmcp import FastMCP
+from datetime import datetime
+
+mcp = FastMCP("horloge")
+
+@mcp.tool()
+def get_current_datetime() -> str:
+    """Retourne la date et l'heure actuelles."""
+    now = datetime.now()
+    return now.strftime("Il est %H:%M le %A %d %B %Y")
+
+if __name__ == "__main__":
+    # Fix DNS rebinding pour acces depuis une autre machine
+    from mcp.server.transport_security import TransportSecuritySettings
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False
+    )
+
+    mcp.settings.host = "0.0.0.0"
+    mcp.settings.port = 7001
+    mcp.run(transport="sse")</code></pre>
+
+<h3>4.2 Fix DNS Rebinding (important)</h3>
+
+<div class="warn">
+  <strong>Probleme 421 Misdirected Request.</strong> Par defaut, FastMCP active la protection DNS rebinding quand <code>host="127.0.0.1"</code>. Meme si on change ensuite <code>host="0.0.0.0"</code>, la whitelist reste <code>["127.0.0.1:*", "localhost:*"]</code>. Les requetes depuis une autre IP (le bot sur 10.1.0.55) sont rejetees avec HTTP 421.
+</div>
+
+<p>La solution est d'ajouter dans le bloc <code>if __name__ == "__main__"</code> de chaque serveur :</p>
+
+<pre><code>from mcp.server.transport_security import TransportSecuritySettings
+mcp.settings.transport_security = TransportSecuritySettings(
+    enable_dns_rebinding_protection=False
+)</code></pre>
+
+<p>Ce fix doit etre applique sur les 5 serveurs. Cote client (bot), on ajoute aussi le header <code>Host</code> correspondant a l'URL du serveur dans les requetes SSE, par precaution.</p>
+
+<!-- ============================================================ -->
+<h2>5. Deploiement</h2>
+
+<h3>5.1 Dependances Python (sur la VM du bot, 10.1.0.55)</h3>
+
+<pre><code>pip3 install --break-system-packages webex-bot httpx mcp python-dotenv</code></pre>
+
+<table>
+  <tr><th>Package</th><th>Role</th></tr>
+  <tr><td><code>webex-bot</code></td><td>Bot Webex en mode websocket (pas de webhook)</td></tr>
+  <tr><td><code>httpx</code></td><td>Client HTTP async pour appeler l'API LLM</td></tr>
+  <tr><td><code>mcp</code></td><td>Client MCP officiel (Anthropic) pour SSE</td></tr>
+  <tr><td><code>python-dotenv</code></td><td>Charger les variables d'environnement depuis bot.env</td></tr>
+</table>
+
+<h3>5.2 Arborescence</h3>
+
+<pre><code>/home/penta/nemo-webex-bot/
+    bot.py            # Point d'entree, WebexBot + LLMCommand
+    config.py         # Tokens, URLs, system prompt
+    mcp_client.py     # MCPManager (connexions SSE aux serveurs MCP)
+    llm_client.py     # call_llm() avec boucle function calling
+    bot.env           # Secrets (WEBEX_BOT_TOKEN, OVH_TOKEN, TAVILY_API_KEY)</code></pre>
+
+<h3>5.3 Service systemd</h3>
+
+<div class="file-ref">Voir <code>nemo-webex-bot.service</code> — Service systemd pour le demarrage automatique.</div>
+
+<pre><code># Activation
+sudo systemctl daemon-reload
+sudo systemctl enable --now nemo-webex-bot
+
+# Logs
+journalctl -u nemo-webex-bot -f</code></pre>
+
+<!-- ============================================================ -->
+<h2>6. Creation du bot Webex</h2>
+
+<p>Avant de coder, il faut creer le bot sur le portail Webex :</p>
+
+<ol style="margin-left: 1.5rem; margin-bottom: 1rem;">
+  <li>Aller sur <code>developer.webex.com</code> &rarr; My Webex Apps &rarr; Create a New App &rarr; Bot</li>
+  <li>Remplir : nom, username (ex: <code>nemo-drancy</code>), icone, description</li>
+  <li>Copier le <strong>Bot Access Token</strong> genere (il ne sera plus visible apres)</li>
+  <li>Mettre ce token dans <code>bot.env</code> comme <code>WEBEX_BOT_TOKEN</code></li>
+</ol>
+
+<div class="note">
+  Le bot repond uniquement aux messages directs (DM) et aux mentions dans les espaces. En mode websocket, il n'a pas besoin de webhook URL ni d'IP publique.
+</div>
+
+<!-- ============================================================ -->
+<h2>7. Obtenir un endpoint LLM (OVH AI Endpoints)</h2>
+
+<ol style="margin-left: 1.5rem; margin-bottom: 1rem;">
+  <li>Creer un compte OVH et activer AI Endpoints dans la console</li>
+  <li>Deployer un modele (ici <code>gpt-oss-120b</code>) — endpoint serverless</li>
+  <li>Recuperer l'URL de l'endpoint et le token API</li>
+  <li>L'API est <strong>compatible OpenAI</strong> : memes formats de requetes/reponses, meme function calling</li>
+</ol>
+
+<p>Tout LLM avec une API OpenAI-compatible et le support du function calling peut etre utilise. Alternatives : OpenAI directement, Mistral AI (La Plateforme), ou un modele local via Ollama + litellm.</p>
+
+<!-- ============================================================ -->
+<h2>8. Points techniques</h2>
+
+<h3>8.1 Modele de threading</h3>
+
+<p>Le bot utilise deux boucles asyncio separees :</p>
+
+<table>
+  <tr><th>Boucle</th><th>Thread</th><th>Role</th></tr>
+  <tr>
+    <td>Boucle webex-bot</td>
+    <td>Thread principal</td>
+    <td>Connexion websocket Webex, dispatch des messages</td>
+  </tr>
+  <tr>
+    <td>Boucle background (<code>_loop</code>)</td>
+    <td>Thread daemon</td>
+    <td>Appels MCP (SSE) et LLM (HTTPS) — tout l'async I/O</td>
+  </tr>
+</table>
+
+<p>Les callbacks de <code>webex-bot</code> sont synchrones. Pour appeler du code async (MCP, LLM), on utilise la fonction helper <code>run_async(coro)</code> qui soumet la coroutine via <code>asyncio.run_coroutine_threadsafe(coro, _loop)</code> et attend le resultat. A noter : avant de creer le WebexBot, on appelle <code>asyncio.set_event_loop(asyncio.new_event_loop())</code> pour eviter les conflits entre les deux boucles.</p>
+
+<h3>8.2 Historique par utilisateur</h3>
+
+<p>Chaque utilisateur Webex a son propre historique de conversation (via <code>defaultdict(list)</code> indexe par l'actor ID Webex). L'historique est limite a <code>MAX_HISTORY</code> (20) messages pour eviter de depasser la fenetre de contexte du LLM. C'est un stockage en memoire — l'historique est perdu au redemarrage du service. La date du jour est injectee dynamiquement dans le system prompt a chaque appel LLM.</p>
+
+<h3>8.3 Gestion des erreurs</h3>
+
+<p>Si un outil MCP echoue, l'erreur est renvoyee au LLM comme resultat de l'outil. Le LLM peut alors soit reformuler sa reponse sans l'outil, soit essayer un autre outil. Si le LLM lui-meme est injoignable, une exception remonte et webex-bot renvoie un message d'erreur generique.</p>
+
+<!-- ============================================================ -->
+<h2>9. Pour reproduire ce setup</h2>
+
+<p class="section-intro">Checklist pour deployer un bot similaire dans un autre contexte :</p>
+
+<ol style="margin-left: 1.5rem; margin-bottom: 1rem; line-height: 2;">
+  <li><strong>Creer le bot Webex</strong> sur developer.webex.com, recuperer le token</li>
+  <li><strong>Obtenir un endpoint LLM</strong> avec support function calling (OVH, OpenAI, Mistral...)</li>
+  <li><strong>Deployer les serveurs MCP</strong> (FastMCP + SSE) sur une machine accessible depuis le bot. Desactiver la DNS rebinding protection si machines differentes.</li>
+  <li><strong>Installer les dependances</strong> : <code>pip3 install webex-bot httpx mcp python-dotenv</code></li>
+  <li><strong>Adapter config.py</strong> : URLs des serveurs MCP, endpoint LLM, system prompt</li>
+  <li><strong>Creer bot.env</strong> avec les tokens</li>
+  <li><strong>Tester manuellement</strong> : <code>python3 bot.py</code> puis envoyer un DM au bot dans Webex</li>
+  <li><strong>Creer le service systemd</strong> pour le demarrage automatique</li>
+</ol>
+
+<!-- ============================================================ -->
+<h2>10. Creer ses propres outils MCP</h2>
+
+<p>Pour ajouter un outil au bot, il suffit de creer un nouveau serveur MCP (ou d'ajouter un outil a un serveur existant) :</p>
+
+<pre><code>from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("mon-serveur")
+
+@mcp.tool()
+def ma_fonction(param1: str, param2: int = 10) -> str:
+    """Description visible par le LLM — soyez precis."""
+    # Logique metier ici
+    return f"Resultat pour {param1} avec valeur {param2}"
+
+if __name__ == "__main__":
+    from mcp.server.transport_security import TransportSecuritySettings
+    mcp.settings.transport_security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=False
+    )
+    mcp.settings.host = "0.0.0.0"
+    mcp.settings.port = 7006  # nouveau port
+    mcp.run(transport="sse")</code></pre>
+
+<p>Puis ajouter l'URL dans <code>config.py</code> du bot :</p>
+
+<pre><code>MCP_SERVERS = {
+    ...
+    "mon-serveur": "http://10.1.0.61:7006/sse",
+}</code></pre>
+
+<p>Redemarrer le bot — le nouvel outil est automatiquement decouvert et propose au LLM.</p>
+
+<!-- ============================================================ -->
+<h2>11. References</h2>
+
+<table>
+  <tr><th>Ressource</th><th>URL</th></tr>
+  <tr><td>webex-bot (PyPI)</td><td><code>pip install webex-bot</code></td></tr>
+  <tr><td>MCP Python SDK</td><td><code>pip install mcp</code></td></tr>
+  <tr><td>Specification MCP</td><td><code>modelcontextprotocol.io</code></td></tr>
+  <tr><td>Webex Developer Portal</td><td><code>developer.webex.com</code></td></tr>
+  <tr><td>OVH AI Endpoints</td><td><code>endpoints.ai.cloud.ovh.net</code></td></tr>
+  <tr><td>FastMCP (Anthropic)</td><td><code>github.com/modelcontextprotocol/python-sdk</code></td></tr>
+</table>
+
+<hr style="margin-top: 3rem; border: none; border-top: 1px solid var(--border);">
+<p style="color: var(--text-muted); font-size: 0.85rem; margin-top: 1rem;">
+  Document genere le 9 mars 2026 — Nemo / DSI Drancy
+</p>
+
+</body>
+</html>
